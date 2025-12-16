@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>LIMBO KEYS</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background: #000;
+            color: white;
+            font-family: 'Segoe UI', sans-serif;
+            text-align: center;
+            overflow: hidden;
+            touch-action: manipulation;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+        .blur-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            background: rgba(0, 0, 0, 0.4);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+            opacity: 1;
+            transition: opacity 0.4s;
+        }
+        .blur-overlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+        .logo {
+            max-width: 80%;
+            height: auto;
+            max-height: 120px;
+            object-fit: contain;
+            margin-bottom: 24px;
+        }
+        .start-btn {
+            padding: 14px 36px;
+            font-size: 1.4em;
+            background: #0f0;
+            color: #000;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            letter-spacing: 1px;
+            transition: transform 0.2s, background 0.3s;
+        }
+        .start-btn:hover {
+            background: #0c0;
+            transform: scale(1.05);
+        }
+
+        .keys-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+        .key {
+            position: absolute;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            background: none !important;
+            border: none !important;
+            transition: left 0.4s cubic-bezier(0.34, 1.56, 0.64, 1),
+                        top 0.4s cubic-bezier(0.34, 1.56, 0.64, 1),
+                        transform 0.2s,
+                        opacity 0.3s ease;
+        }
+        .key img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            pointer-events: none;
+        }
+        .key.no-transition {
+            transition: none !important;
+        }
+        /* 🔸 Ключи НЕ увеличиваются при наведении */
+        .key:hover:not(.locked) {
+            z-index: 20 !important;
+            /* transform: scale(1.1); — отключено */
+        }
+        .locked {
+            pointer-events: none;
+            opacity: 0.6;
+        }
+
+        /* Level Complete */
+        #levelComplete {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: none;
+            z-index: 20;
+            background: rgba(0, 0, 0, 0.8);
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* 💥 Анимация: падение + подпрыг */
+        @keyframes dropAndBounce {
+            0% {
+                transform: translateY(-100vh) scale(0.8);
+                opacity: 0;
+            }
+            50% {
+                transform: translateY(0) scale(1.05);
+                opacity: 1;
+            }
+            70% {
+                transform: translateY(-20px) scale(0.95);
+            }
+            85% {
+                transform: translateY(0) scale(1.02);
+            }
+            100% {
+                transform: translateY(0) scale(1);
+            }
+        }
+
+        #levelComplete img {
+            max-width: 80%;
+            max-height: 60vh;
+            object-fit: contain;
+        }
+
+        .level-complete-animate {
+            animation: dropAndBounce 1.2s cubic-bezier(0.5, 0, 0.5, 1.2) forwards;
+        }
+
+        audio {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="keys-container" id="keysContainer"></div>
+
+    <div class="blur-overlay" id="blurOverlay">
+        <img src="limbo-keys-logo.png" alt="LIMBO KEYS" class="logo">
+        <button class="start-btn" id="startBtn">НАЧАТЬ</button>
+    </div>
+
+    <!-- Звуки -->
+    <audio id="music" src="Isolation.mp3" preload="auto"></audio>
+    <audio id="explodeSound" src="Explode_11.ogg" preload="auto"></audio>
+    <audio id="winSound" src="EndStart_02.ogg" preload="auto"></audio>
+
+    <!-- Level Complete (изначально скрыт) -->
+    <div id="levelComplete">
+        <img src="level_complete.png" alt="Level Complete">
+    </div>
+
+    <script>
+        const KEY_IMG = 'key.png';
+        const LIGHT_KEY_IMG = 'light_key.png';
+
+        const totalKeys = 8;
+        let correctKeyIndex = -1;
+        let gamePhase = 'waiting';
+        let keys = [];
+        let shuffleInterval = null;
+        let spinRAF = null;
+        let spinAngle = 0;
+        const spinSpeed = 0.0012;
+        let canClick = false;
+
+        // --- Вспомогательные функции ---
+
+        function getKeySize() {
+            const container = document.getElementById('keysContainer');
+            const cw = container.clientWidth;
+            const ch = container.clientHeight;
+            return Math.max(40, Math.min(cw / 3.5, ch / 5.5));
+        }
+
+        function getGridPositions() {
+            const container = document.getElementById('keysContainer');
+            const cw = container.clientWidth;
+            const ch = container.clientHeight;
+            const keySize = getKeySize();
+            const cols = 2, rows = 4;
+            const cellW = cw / cols;
+            const cellH = ch / rows;
+            const positions = [];
+            for (let i = 0; i < totalKeys; i++) {
+                const col = i % cols;
+                const row = Math.floor(i / cols);
+                const x = col * cellW + (cellW - keySize) / 2;
+                const y = row * cellH + (cellH - keySize) / 2;
+                positions.push({ x, y, size: keySize });
+            }
+            return positions;
+        }
+
+        function shuffleAndPlaceKeys() {
+            keys.forEach(key => key.classList.add('no-transition'));
+            const positions = getGridPositions();
+            const shuffledPositions = [...positions].sort(() => Math.random() - 0.5);
+            keys.forEach((key, i) => {
+                const pos = shuffledPositions[i];
+                key.style.width = `${pos.size}px`;
+                key.style.height = `${pos.size}px`;
+                key.style.left = `${pos.x}px`;
+                key.style.top = `${pos.y}px`;
+            });
+            requestAnimationFrame(() => {
+                keys.forEach(key => key.classList.remove('no-transition'));
+            });
+        }
+
+        function arrangeKeysInCircle() {
+            const container = document.getElementById('keysContainer');
+            const cw = container.clientWidth;
+            const ch = container.clientHeight;
+            const keySize = getKeySize();
+            const centerX = cw / 2;
+            const centerY = ch / 2;
+            const radius = Math.min(cw, ch) * 0.35;
+
+            keys.forEach((key, i) => {
+                key.style.width = `${keySize}px`;
+                key.style.height = `${keySize}px`;
+                const angle = (i / totalKeys) * Math.PI * 2;
+                const x = centerX + radius * Math.cos(angle) - keySize / 2;
+                const y = centerY + radius * Math.sin(angle) - keySize / 2;
+                key.style.left = `${x}px`;
+                key.style.top = `${y}px`;
+            });
+        }
+
+        function spinCircle() {
+            if (gamePhase !== 'spinning') return;
+            keys.forEach(key => key.classList.add('no-transition'));
+
+            spinAngle += spinSpeed;
+            const container = document.getElementById('keysContainer');
+            const cw = container.clientWidth;
+            const ch = container.clientHeight;
+            const keySize = getKeySize();
+            const centerX = cw / 2;
+            const centerY = ch / 2;
+            const radius = Math.min(cw, ch) * 0.35;
+
+            keys.forEach((key, i) => {
+                const baseAngle = (i / totalKeys) * Math.PI * 2;
+                const currentAngle = baseAngle + spinAngle;
+                const x = centerX + radius * Math.cos(currentAngle) - keySize / 2;
+                const y = centerY + radius * Math.sin(currentAngle) - keySize / 2;
+                key.style.left = `${x}px`;
+                key.style.top = `${y}px`;
+            });
+
+            spinRAF = requestAnimationFrame(spinCircle);
+        }
+
+        function stopSpinning() {
+            if (spinRAF) {
+                cancelAnimationFrame(spinRAF);
+                spinRAF = null;
+            }
+        }
+
+        // --- Инициализация ключей ---
+
+        function initKeys() {
+            const container = document.getElementById('keysContainer');
+            container.innerHTML = '';
+            keys = [];
+
+            for (let i = 0; i < totalKeys; i++) {
+                const keyEl = document.createElement('div');
+                keyEl.className = 'key';
+                keyEl.dataset.index = i;
+
+                const img = document.createElement('img');
+                img.src = KEY_IMG;
+                img.alt = 'Ключ';
+                keyEl.appendChild(img);
+
+                keyEl.addEventListener('click', (e) => {
+                    if (!canClick || gamePhase !== 'spinning') return;
+
+                    if (shuffleInterval) clearInterval(shuffleInterval);
+                    stopSpinning();
+                    gamePhase = 'ended';
+
+                    const index = parseInt(keyEl.dataset.index);
+
+                    if (index === correctKeyIndex) {
+                        // ✅ Правильный выбор
+                        img.src = LIGHT_KEY_IMG;
+
+                        // Через 5 секунд — звук победы
+                        setTimeout(() => {
+                            const winSound = document.getElementById('winSound');
+                            winSound.currentTime = 0;
+                            const playPromise = winSound.play();
+                            if (playPromise !== undefined) {
+                                playPromise.catch(e => console.warn("Не удалось проиграть звук победы:", e));
+                            }
+
+                            // Через 2.5 секунды после звука (на 7.5-й секунде) — показать Level Complete
+                            setTimeout(() => {
+                                const levelComplete = document.getElementById('levelComplete');
+                                levelComplete.style.display = 'flex';
+
+                                // Запускаем анимацию с задержкой, чтобы она точно сработала
+                                setTimeout(() => {
+                                    levelComplete.querySelector('img').classList.add('level-complete-animate');
+                                }, 10);
+
+                                // Через 2 секунды — перезагрузить (на 9.5-й секунде)
+                                setTimeout(() => {
+                                    location.reload();
+                                }, 2000);
+                            }, 2500);
+                        }, 5000);
+                    } else {
+                        // ❌ Неправильный выбор
+                        const music = document.getElementById('music');
+                        const explodeSound = document.getElementById('explodeSound');
+
+                        music.pause(); // 🎵 Остановить музыку
+
+                        explodeSound.currentTime = 0;
+                        const playPromise = explodeSound.play();
+                        if (playPromise !== undefined) {
+                            playPromise.catch(e => console.warn("Не удалось проиграть звук взрыва:", e));
+                        }
+
+                        keys.forEach(k => k.remove());
+                        setTimeout(() => {
+                            location.reload();
+                        }, 700);
+                    }
+
+                    keys.forEach(k => k.classList.add('locked'));
+                    canClick = false;
+                });
+
+                container.appendChild(keyEl);
+                keys.push(keyEl);
+            }
+
+            const positions = getGridPositions();
+            keys.forEach((key, i) => {
+                const pos = positions[i];
+                key.style.width = `${pos.size}px`;
+                key.style.height = `${pos.size}px`;
+                key.style.left = `${pos.x}px`;
+                key.style.top = `${pos.y}px`;
+            });
+        }
+
+        // --- Запуск игры ---
+
+        function startGame() {
+            document.getElementById('blurOverlay').classList.add('hidden');
+
+            const audio = document.getElementById('music');
+            const explodeSound = document.getElementById('explodeSound');
+            const winSound = document.getElementById('winSound');
+
+            // 🔓 Разблокируем все звуки при первом пользовательском действии
+            [explodeSound, winSound].forEach(sound => {
+                sound.play().then(() => {
+                    sound.pause();
+                    sound.currentTime = 0;
+                }).catch(() => {});
+            });
+
+            audio.currentTime = 177; // 2:57
+
+            const proceedWithGame = () => {
+                gamePhase = 'highlighted';
+                correctKeyIndex = Math.floor(Math.random() * totalKeys);
+                const correctKeyImg = keys[correctKeyIndex].querySelector('img');
+                correctKeyImg.src = LIGHT_KEY_IMG;
+
+                setTimeout(() => {
+                    if (gamePhase === 'highlighted') {
+                        correctKeyImg.src = KEY_IMG;
+                    }
+                }, 1500);
+
+                setTimeout(() => {
+                    if (gamePhase !== 'highlighted') return;
+                    gamePhase = 'shuffling';
+
+                    if (shuffleInterval) clearInterval(shuffleInterval);
+
+                    let count = 0;
+                    const totalShuffles = 30;
+                    const intervalTime = 10000 / totalShuffles;
+
+                    shuffleAndPlaceKeys();
+
+                    shuffleInterval = setInterval(() => {
+                        count++;
+                        shuffleAndPlaceKeys();
+
+                        if (count >= totalShuffles) {
+                            clearInterval(shuffleInterval);
+                            shuffleInterval = null;
+                            if (gamePhase === 'shuffling') {
+                                gamePhase = 'spinning';
+                                arrangeKeysInCircle();
+                                setTimeout(() => spinCircle(), 400);
+                            }
+                        }
+                    }, intervalTime);
+                }, 4000);
+
+                setTimeout(() => {
+                    canClick = true;
+                }, 14000);
+            };
+
+            audio.play()
+                .then(() => proceedWithGame())
+                .catch(e => {
+                    console.warn('Музыка не проиграна, но игра запускается:', e);
+                    proceedWithGame();
+                });
+        }
+
+        // --- События ---
+
+        window.addEventListener('load', () => {
+            initKeys();
+        });
+
+        document.getElementById('startBtn').addEventListener('click', startGame);
+
+        window.addEventListener('resize', () => {
+            if (gamePhase === 'waiting') {
+                const positions = getGridPositions();
+                keys.forEach((key, i) => {
+                    const pos = positions[i];
+                    key.style.width = `${pos.size}px`;
+                    key.style.height = `${pos.size}px`;
+                    key.style.left = `${pos.x}px`;
+                    key.style.top = `${pos.y}px`;
+                });
+            }
+        });
+    </script>
+</body>
+</html>
